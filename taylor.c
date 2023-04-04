@@ -27,7 +27,7 @@ char buffer[1024*1024*3];
 struct sockaddr_un serveraddr;
 
 typedef struct {
- bool Debug,pause,AsService;
+ bool Debug,pause,AsService,blockDisp;
  uint8_t *MEM,PageID[2],ROMBANK[33][SIZ8MB],ErrorType;
  uint16_t Clock;
  uint64_t TI, tmp[8];
@@ -179,7 +179,9 @@ void sendError() {
 
 void Clock(uint32_t *i);
 int main(int argc, char *argv[]) { //############################################//
- sys.Debug = false;
+ sys.Debug = true; //debug mode
+ sys.blockDisp = false; //block DISP instuction messages
+ 
  if((sys.MEM = malloc(0xD800000)) == NULL) { printf("Memory allocation failed.\n"); return -1;}
  memset(sys.MEM, 0, 0xD800000);
  sys.Clock = 0;
@@ -189,23 +191,22 @@ int main(int argc, char *argv[]) { //###########################################
  for(uint8_t i=0;i<33;i++){ memset(sys.ROMBANK[i], 0, SIZ8MB); }
  pthread_t call_Core0; pthread_create(&call_Core0, NULL, ClientCore, 0);
  pthread_t call_Core1; pthread_create(&call_Core1, NULL, ClientCore, 1);
- //pthread_t call_Clock; pthread_create(&call_Clock, NULL, Clock, NULL);
  for(int i=0x9800000;i<2+(0xFFFF*11);i++){sys.MEM[i]=0;}
  GPU.SP=0xD7FFFFF; GPU.BP=0xD780000; GPU.MP=0xD7FFFFF;
- 
- if(argc < 2) {// perror("Please Provide a Path to the UNIX File\n");
- 
-  sys.RN = "./fib-endless.tgr"; sys.AsService = false;
-  printf("Starting Taylor v0.27 Alpha Build\n\\with ROM: %s\n",sys.RN);
+ if(argc < 2) { // perror("Please Provide a Path to the UNIX File\n");
+  sys.AsService = false;
+  sys.RN = "./pagetest.tgr"; //fib-endless
+  
+  printf("Starting Taylor v0.28 Alpha Build\n\\with ROM: %s\n",sys.RN);
   if(LoadCart()<0) { return -1; } ResetCore(0);ResetCore(1);
   LoadPage(0,0); LoadPage(1,1); //Feeding the ROM to Taylor
   dumpData("ROM - 0", sys.ROMBANK[0], SIZ8MB, 0, 256);
   
-  printf("Header: \""); for(int i=0;i<5;i++){printf("%c",ascii127[sys.MEM[i]]);}
-  printf("\"\nTitle: \""); for(int i=0;i<16;i++){printf("%c",ascii127[sys.MEM[0x05+i]]);}
-  printf("\"\nversion: \""); for(int i=0;i<12;i++){printf("%c",ascii127[sys.MEM[0x15+i]]);}
-  if (sys.MEM[0]>0) { printf("\"\nAuthor: \""); for(int i=0;i<32;i++){printf("%c",ascii127[sys.MEM[0x21+i]]);} }
-  if (sys.MEM[0]>1) { printf("\"\nCheckSum: \""); for(int i=0;i<32;i++){printf("%c",ascii127[sys.MEM[0x41+i]]);} }
+  printf("Header: \""); for(uint8_t i=0;i<5;i++){printf("%c",ascii127[sys.MEM[i]]);}
+  printf("\"\nTitle: \""); for(uint8_t i=0;i<16;i++){printf("%c",ascii127[sys.MEM[0x05+i]]);}
+  printf("\"\nversion: \""); for(uint8_t i=0;i<12;i++){printf("%c",ascii127[sys.MEM[0x15+i]]);}
+  if (sys.MEM[0]>0) { printf("\"\nAuthor: \""); for(uint8_t i=0;i<32;i++){printf("%c",ascii127[sys.MEM[0x21+i]]);} }
+  if (sys.MEM[0]>1) { printf("\"\nCheckSum: \""); for(uint8_t i=0;i<32;i++){printf("%c",ascii127[sys.MEM[0x41+i]]);} }
   printf("\"\n");
   
   CPU[0].running = true;
@@ -322,9 +323,7 @@ void Clock(uint32_t *i) {
   sys.Clock++;
   if((sys.Clock%1000)==0){
    sys.IPS = (((CPU[0].IPS+CPU[1].IPS)/2.0f)/24000000.0f)*100;
-   printf("InstuctionsPerSecond: %8ld|%8ld (%8ld) -> %.4f%\n",CPU[0].IPS, CPU[1].IPS, CPU[0].IPS+CPU[1].IPS, sys.IPS);
-   printf("\\                     24000000|24000000 (48000000) -> 100.0000%\n");
-   printf("\\TotalRan: %ld|%ld (%ld)\n",CPU[0].TI,CPU[1].TI,sys.TI);
+   printf("\nInstuctionsPerSecond: %8ld|%8ld (%8ld) -> %.4f%%\n\\                     24000000|24000000 (48000000) -> 100.0000%%\n\\TotalRan: %ld|%ld (%ld)\n\n",CPU[0].IPS, CPU[1].IPS, CPU[0].IPS+CPU[1].IPS, sys.IPS,CPU[0].TI,CPU[1].TI,sys.TI);
    CPU[0].ticked=1; CPU[1].ticked=1;
 }}}
 
@@ -458,12 +457,11 @@ void ClientCore(bool ID) {
      if ((IMM % 0x2) == 0) { CPU[ID].REGs[C] = (CPU[ID].REGs[A] << 8) | (CPU[ID].REGs[B] & 0xFF); }else{ CPU[ID].REGs[C] = (CPU[ID].REGs[A] << 4) | (CPU[ID].REGs[B] & 0xF); } break;
 
     case 0x13:// WMEM   |
-     if (sys.Debug == true) { sprintf(msg,"%sWMEM\n",msg);}
-      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[1]=true;
+     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[1]=true;
      if (IMM > 0xD7FFFFF) { IMM = (CPU[ID].REGs[B]<<16|CPU[ID].REGs[C])%0xD7FFFFF; }
      if (IMM > 0x0FFFFFF) {
       if (sys.Debug == true) {
-       sprintf(msg,"%sEMU Service: Writing REG:%c to 0x%x  (Area ",msg,sys.REG[A],IMM);
+       sprintf(msg,"%sWMEM\n  \\Writing REG:%c to 0x%x  (Area ",msg,sys.REG[A],IMM);
        if      (IMM>=0x0000000 && IMM<=0x07FFFFF) { sprintf(msg,"%s0:ROM PAGE#0)\n",msg); }
        else if (IMM>=0x0800000 && IMM<=0x0FFFFFF) { sprintf(msg,"%s1:ROM PAGE#1)\n",msg); }
        else if (IMM>=0x1000000 && IMM<=0x17FFFFF) { sprintf(msg,"%s2:SAV data)\n",msg); }
@@ -481,7 +479,7 @@ void ClientCore(bool ID) {
      if (IMM > 0xD7FFFFF) { IMM = (CPU[ID].REGs[B]<<16|CPU[ID].REGs[C])%0xD7FFFFF; }
      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true;
      if (sys.Debug == true) {
-      sprintf(msg,"%sRMEM\nEMU Service: Reading 0x%x to REG:%c (Area ",msg,IMM,sys.REG[A]);
+      sprintf(msg,"%sRMEM\n  \\EMU Service: Reading 0x%x to REG:%c (Area ",msg,IMM,sys.REG[A]);
       if      (IMM>=0x0000000 && IMM<=0x07FFFFF) { sprintf(msg,"%s0:ROM PAGE#0)\n",msg); }
       else if (IMM>=0x0800000 && IMM<=0x0FFFFFF) { sprintf(msg,"%s1:ROM PAGE#1)\n",msg); }
       else if (IMM>=0x1000000 && IMM<=0x17FFFFF) { sprintf(msg,"%s2:SAV data)\n",msg); }
@@ -503,10 +501,11 @@ void ClientCore(bool ID) {
     case 0x16:// DISP   |
      if (sys.Debug == true) { sprintf(msg,"%sDISP\n",msg); }
      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[1]=true;
-     if((IMM%3)==0) { printf("%c: 0x%04X\n",sys.REG[A],CPU[ID].REGs[A]); } else
-     if((IMM%3)==1) { printf("%c: 0x%04X\t%c: 0x%04X\t\n",sys.REG[A],CPU[ID].REGs[A],sys.REG[B],CPU[ID].REGs[B]); } else
-     if((IMM%3)==2) { printf("%c: 0x%04X\t%c: 0x%04X\t%c: 0x%04X\t\n",sys.REG[A],CPU[ID].REGs[A],sys.REG[B],CPU[ID].REGs[B],sys.REG[C],CPU[ID].REGs[C]); }
-     break;
+     if (!sys.blockDisp) {
+      if((IMM%3)==0) { printf("%c: 0x%04X\n",sys.REG[A],CPU[ID].REGs[A]); } else
+      if((IMM%3)==1) { printf("%c: 0x%04X\t%c: 0x%04X\t\n",sys.REG[A],CPU[ID].REGs[A],sys.REG[B],CPU[ID].REGs[B]); } else
+      if((IMM%3)==2) { printf("%c: 0x%04X\t%c: 0x%04X\t%c: 0x%04X\t\n",sys.REG[A],CPU[ID].REGs[A],sys.REG[B],CPU[ID].REGs[B],sys.REG[C],CPU[ID].REGs[C]); }
+     } break;
     case 0x17:// IPOUT  |
      if (sys.Debug == true) { sprintf(msg,"%sIPOUT\n",msg); }
      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true;
@@ -567,8 +566,8 @@ void ClientCore(bool ID) {
      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[1]=true;
      dslp = CPU[ID].REGs[A];
      break;
-    case 0xFF:
-     if (sys.Debug == true) { sprintf(msg,"%sNOP\n",msg); } //
+    case 0xFF:// NOP    |
+     if (sys.Debug == true) { sprintf(msg,"%sNOP\n",msg); }
      memset(CPU[ID].flag, 0, 8); break;
     default:
      if (sys.Debug == true) { sprintf(msg,"%sUNKNOWN\n",msg); }
@@ -577,18 +576,18 @@ void ClientCore(bool ID) {
      CPU[ID].running = 0;
       break;
    } CPU[ID].IP+=6; CPU[ID].IPS++; CPU[ID].TI++; sys.TI++;
-   if (sys.Debug == true) { printf("%s",msg); memset(msg,0,sizeof(msg)); } printError();
+   if (sys.Debug == true) { printf("%s",msg); memset(msg,0,sizeof(msg)); }
+   if (sys.AsService == true) {sendError(); } else { printError(); }
    if (sys.MEM[CPU[ID].IP] == 0x21) { usleep(dslp*1000); }
    else {
     //what do i do here? clearly this isn't right (too slow)
-    //usleep((1-(CPU[ID].IPS/24000000.0f)));
-    // sleep((1-(CPU[ID].IPS/24000000.0f)));
-    // sleep(0);
+    //usleep((1-(CPU[ID].IPS/24000000.0f))*1000);
     
-    // this only gives around 50%  24319687
+    // this only gives around 50%
     for(uint32_t i=0;i<CPU[ID].IPS/ 6000000;i++);
    }
 //   sleep(1);
 //   while(getchar()!='\n');
 //   dumpData("ROMPG#1", sys.MEM, SIZ8MB, SIZ8MB, SIZ8MB+0x40);
 }}}
+
