@@ -196,7 +196,7 @@ int main(int argc, char *argv[]) { //###########################################
  if(argc < 2) {// perror("Please Provide a Path to the UNIX File\n");
  
   sys.RN = "./fib-endless.tgr"; sys.AsService = false;
-  printf("Starting Talor v0.27 Alpha Build\n\\with ROM: %s\n",sys.RN);
+  printf("Starting Taylor v0.27 Alpha Build\n\\with ROM: %s\n",sys.RN);
   if(LoadCart()<0) { return -1; } ResetCore(0);ResetCore(1);
   LoadPage(0,0); LoadPage(1,1); //Feeding the ROM to Taylor
   dumpData("ROM - 0", sys.ROMBANK[0], SIZ8MB, 0, 256);
