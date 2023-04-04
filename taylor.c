@@ -195,7 +195,7 @@ int main(int argc, char *argv[]) { //###########################################
  GPU.SP=0xD7FFFFF; GPU.BP=0xD780000; GPU.MP=0xD7FFFFF;
  if(argc < 2) { // perror("Please Provide a Path to the UNIX File\n");
   sys.AsService = false;
-  sys.RN = "./pagetest.tgr"; //fib-endless
+  sys.RN = "./fib-endless.tgr";
   
   printf("Starting Taylor v0.28 Alpha Build\n\\with ROM: %s\n",sys.RN);
   if(LoadCart()<0) { return -1; } ResetCore(0);ResetCore(1);
