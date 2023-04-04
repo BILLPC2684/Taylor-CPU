@@ -7,6 +7,10 @@
 *.obj
 *.elf
 
+# Save Files
+*.sav
+*.st
+
 # Linker output
 *.ilk
 *.map
