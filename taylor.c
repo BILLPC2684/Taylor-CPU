@@ -6,6 +6,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/time.h>
 #include <pthread.h>
 #include <math.h>
 #include <time.h>
@@ -25,6 +26,7 @@ char* ErrorTexts[3] = {"Warning", "Error", "Fatal"};
 int TGRsock, client, server, BufferLength = 1024*1024*8;
 char buffer[1024*1024*3];
 struct sockaddr_un serveraddr;
+struct timespec start, end;
 
 typedef struct {
  bool Debug,pause,AsService,blockDisp;
@@ -195,7 +197,7 @@ int main(int argc, char *argv[]) { //###########################################
  GPU.SP=0xD7FFFFF; GPU.BP=0xD780000; GPU.MP=0xD7FFFFF;
  if(argc < 2) { // perror("Please Provide a Path to the UNIX File\n");
   sys.AsService = false;
-  sys.RN = "./fib-endless.tgr";
+  sys.RN = "./coretest2.tgr"; //fib-endless
   
   printf("Starting Taylor v0.28 Alpha Build\n\\with ROM: %s\n",sys.RN);
   if(LoadCart()<0) { return -1; } ResetCore(0);ResetCore(1);
@@ -297,8 +299,10 @@ int CARTINIT() { LoadPage(0,0);
   case 0x02:
    //TGRHeader[5]+Title[16]+version[12]+Author[32]+CheckSum[32]
    return 5+16+12+32+32+1;
- } 
+ }
 }
+
+uint64_t zeroup(int64_t x) { return (x>=0)?x:0; }
 
 void ResetCore(bool ID) {
  uint32_t*MP    = {0x97FFDFF,0x97DFDFF},
@@ -319,7 +323,7 @@ void LoadPage(bool PID, uint8_t BID) {
 
 void Clock(uint32_t *i) {
  usleep(1000); *i++;
- if(*i%1000) { //1000 McS = 1 MS
+ if(*i%1000 && !sys.pause) { //1000 McS = 1 MS
   sys.Clock++;
   if((sys.Clock%1000)==0){
    sys.IPS = (((CPU[0].IPS+CPU[1].IPS)/2.0f)/24000000.0f)*100;
@@ -332,136 +336,156 @@ void ClientCore(bool ID) {
  uint16_t dslp = 0;
  int i=0;
  while(true) {
-  if(CPU[ID].ticked) { CPU[ID].IPS = 0; CPU[ID].ticked = 0; }
-  if(CPU[ID].running && ~sys.pause) { CPU[ID].IP=CPU[ID].IP%0xD800000;
-   uint8_t A   =  sys.MEM[CPU[ID].IP+1] >> 4 ;       //4 \.
-   uint8_t B   =  sys.MEM[CPU[ID].IP+1] & 0xF;       //4 |-> A/B/C = 1.5 bytes
-   uint8_t C   =  sys.MEM[CPU[ID].IP+2] >> 4 ;       //4 /'
-   int32_t IMM = (sys.MEM[CPU[ID].IP+2] & 0xF) << 8; //4 \.
-   IMM  = (IMM |  sys.MEM[CPU[ID].IP+3]) << 8;       //8 |->  IMM  = 3.5 bytes
-   IMM  = (IMM |  sys.MEM[CPU[ID].IP+4]) << 8;       //8 |
-   IMM |=         sys.MEM[CPU[ID].IP+5];             //8 /'
-   if (sys.Debug == true) {
-    sprintf(msg,"%s\n[Core#%x] IC: 0x%07X/%9X (Area ",msg,ID,CPU[ID].IP,CPU[ID].IP);
-    if      (CPU[ID].IP>=0x0000000 && CPU[ID].IP<=0x07FFFFF) { sprintf(msg,"%s0:ROM PAGE#0",msg); }
-    else if (CPU[ID].IP>=0x0800000 && CPU[ID].IP<=0x0FFFFFF) { sprintf(msg,"%s1:ROM PAGE#1",msg); }
-    else if (CPU[ID].IP>=0x1000000 && CPU[ID].IP<=0x17FFFFF) { sprintf(msg,"%s2:SAV data",msg); }
-    else if (CPU[ID].IP>=0x1800000 && CPU[ID].IP<=0x96FFBFF) { sprintf(msg,"%s3:Work RAM",msg); }
-    else if (CPU[ID].IP>=0x96FFC00 && CPU[ID].IP<=0x97FFBFF) { sprintf(msg,"%s4:Stack Memory",msg); }
-    else if (CPU[ID].IP>=0x97FFC00 && CPU[ID].IP<=0x97FFFFF) { sprintf(msg,"%s5:Static Memory",msg); }
-    else if (CPU[ID].IP>=0x9800000 && CPU[ID].IP<=0xD77FFFF) { sprintf(msg,"%s6:Video RAM",msg); }
-    else if (CPU[ID].IP>=0xD780000 && CPU[ID].IP<=0xD7FFFFF) { sprintf(msg,"%s7:Stack VMem",msg); }
-    else { sprintf(msg,"%s?:Invalid Address",msg); } sprintf(msg,"%s)\n\\ >> [",msg);
-    for (i=0; i < 6; i++) { sprintf(msg,"%s0x%02X",msg,sys.MEM[CPU[ID].IP+i]); if (i < 5) { sprintf(msg,"%s, ",msg); } }
-    sprintf(msg,"%s] | [A:%c, B:%c, C:%c, IMM:0x%07X]\n\\REGs: [",msg,sys.REG[A],sys.REG[B],sys.REG[C],IMM);
-    for (i=0; i < 8; i++) { sprintf(msg,"%s%c:0x%04X%s",msg,sys.REG[i],CPU[ID].REGs[i],(i<7)?", ":""); }
-//    sprintf(msg,"%s%c:0x%04X, ",msg,sys.REG[0],CPU[ID].REGs[0]); sprintf(msg,"%s%c:0x%04X, ",msg,sys.REG[1],CPU[ID].REGs[1]); sprintf(msg,"%s%c:0x%04X, ",msg,sys.REG[2],CPU[ID].REGs[2]); sprintf(msg,"%s%c:0x%04X, ",msg,sys.REG[3],CPU[ID].REGs[3]); sprintf(msg,"%s%c:0x%04X, ",msg,sys.REG[4],CPU[ID].REGs[4]); sprintf(msg,"%s%c:0x%04X, ",msg,sys.REG[5],CPU[ID].REGs[5]); sprintf(msg,"%s%c:0x%04X, ",msg,sys.REG[6],CPU[ID].REGs[6]); sprintf(msg,"%s%c:0x%04X"  ,msg,sys.REG[7],CPU[ID].REGs[7]);
-    sprintf(msg,"%s] | TotalRan: %ld (%ld)\n\\StackPointer: 0x%x/%d | StackBase: 0x%x/%d\n\\\\StackData:[",msg,CPU[ID].TI,sys.TI,CPU[ID].SP,CPU[ID].SP,CPU[ID].BP,CPU[ID].BP);
-    for (i = CPU[ID].SP+1; i <= CPU[ID].BP; ++i){
-     if((i+1)%2==0) { sprintf(msg,"%s 0x",msg); }
-     sprintf(msg,"%s%02X",msg,sys.MEM[i]);
-     if(i%16==0 && i != 0) { sprintf(msg,"%s\n",msg); }
-    } sprintf(msg,"%s]\n \\instruction: ",msg);
-   }
-   //Flags | WrittenREG, ReadREG, OverFlow, PointerOOB, ALUoperated, DivideBy0
-//   printf("sys.MEM[CPU[ID].IP]: 0x%02X\n",sys.MEM[CPU[ID].IP]);
-   switch(sys.MEM[CPU[ID].IP]) {
-    case 0x00:// LOAD   |
-     if (sys.Debug == true) { sprintf(msg,"%sMOV\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true;
-     if (C > 0) { CPU[ID].REGs[A] = CPU[ID].REGs[B]; CPU[ID].flag[1]=true; }
-     else { CPU[ID].REGs[A] = IMM; } break;
-    case 0x01:// ADD    |
-     if (sys.Debug == true) { sprintf(msg,"%sADD\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
-     if (IMM > 0) { CPU[ID].REGs[C] = CPU[ID].REGs[A]+IMM;             if(CPU[ID].REGs[A]+IMM            >0xFFFF){CPU[ID].flag[2]=true;}}
-     else {         CPU[ID].REGs[C] = CPU[ID].REGs[A]+CPU[ID].REGs[B]; if(CPU[ID].REGs[A]+CPU[ID].REGs[B]>0xFFFF){CPU[ID].flag[2]=true;}} break;
-    case 0x02:// SUB    |
-     if (sys.Debug == true) { sprintf(msg,"%sSUB\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[2]=true; CPU[ID].flag[4]=true;
-     if (IMM > 0) { CPU[ID].REGs[C] = CPU[ID].REGs[A]-IMM;             if(CPU[ID].REGs[A]-IMM            <0){CPU[ID].flag[2]=false;}}
-     else {         CPU[ID].REGs[C] = CPU[ID].REGs[A]-CPU[ID].REGs[B]; if(CPU[ID].REGs[A]-CPU[ID].REGs[B]<0){CPU[ID].flag[2]=false;}} break;
-    case 0x03:// MUL    |
-     if (sys.Debug == true) { sprintf(msg,"%sMUL\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
-     if (IMM > 0) { CPU[ID].REGs[C] = CPU[ID].REGs[A]*IMM;             if(CPU[ID].REGs[A]*IMM            >0xFFFF){CPU[ID].flag[2]=true;}}
-     else {         CPU[ID].REGs[C] = CPU[ID].REGs[A]*CPU[ID].REGs[B]; if(CPU[ID].REGs[A]*CPU[ID].REGs[B]>0xFFFF){CPU[ID].flag[2]=true;}} break;
-    case 0x04:// DIV    |
-     if (sys.Debug == true) { sprintf(msg,"%sDIV\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[2]=true; CPU[ID].flag[4]=true;
-     if (CPU[ID].REGs[A]==0) {CPU[ID].REGs[C] = 0; CPU[ID].flag[5]=true; break;}
-     if (IMM >= 1) { CPU[ID].REGs[C] = CPU[ID].REGs[A]/IMM;             if(CPU[ID].REGs[A]%IMM            >0){CPU[ID].flag[2]=false;}}
-     else {          CPU[ID].REGs[C] = CPU[ID].REGs[A]/CPU[ID].REGs[B]; if(CPU[ID].REGs[A]%CPU[ID].REGs[B]>0){CPU[ID].flag[2]=false;}} break;
-    case 0x05:// MOD    |
-     if (sys.Debug == true) { sprintf(msg,"%sMOD\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
-     if (CPU[ID].REGs[A]==0) {CPU[ID].REGs[C] = 0; CPU[ID].flag[5]=true; break;}
-     if (IMM >= 1) { CPU[ID].REGs[C] = CPU[ID].REGs[A]%IMM;             }
-     else {          CPU[ID].REGs[C] = CPU[ID].REGs[A]%CPU[ID].REGs[B]; } break;
-    case 0x06:// AND    |
-     if (sys.Debug == true) { sprintf(msg,"%sAND\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
-     if (IMM > 0) { CPU[ID].REGs[C] = CPU[ID].REGs[A]&IMM; }else{ CPU[ID].REGs[C] = CPU[ID].REGs[A]&CPU[ID].REGs[B]; } break;
-    case 0x07:// OR     |
-     if (sys.Debug == true) { sprintf(msg,"%sOR\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
-     if (IMM > 0) { CPU[ID].REGs[C] = CPU[ID].REGs[A]|IMM; }else{ CPU[ID].REGs[C] = CPU[ID].REGs[A]|CPU[ID].REGs[B]; } break;
-    case 0x08:// XOR    |
-     if (sys.Debug == true) { sprintf(msg,"%sXOR\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
-     if (IMM > 0) { CPU[ID].REGs[C] = CPU[ID].REGs[A]^IMM; }else{ CPU[ID].REGs[C] = CPU[ID].REGs[A]^CPU[ID].REGs[B]; } break;
-    case 0x09:// BSL    |
-     if (sys.Debug == true) { sprintf(msg,"%sBSL\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
-     if (IMM > 0) { CPU[ID].REGs[C] = CPU[ID].REGs[A]<<IMM;             if(CPU[ID].REGs[A]<<IMM            >0xFFFF){CPU[ID].flag[2]=true;}}
-     else {         CPU[ID].REGs[C] = CPU[ID].REGs[A]<<CPU[ID].REGs[B]; if(CPU[ID].REGs[A]<<CPU[ID].REGs[B]>0xFFFF){CPU[ID].flag[2]=true;}} break;
-    case 0x0A:// BSR    |
-     if (sys.Debug == true) { sprintf(msg,"%sBSR\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[2]=true; CPU[ID].flag[4]=true;
-     if (IMM > 0) { CPU[ID].REGs[C] = CPU[ID].REGs[A]>>IMM;             if(CPU[ID].REGs[A]>>IMM            <0){CPU[ID].flag[2]=false;}}
-     else {         CPU[ID].REGs[C] = CPU[ID].REGs[A]>>CPU[ID].REGs[B]; if(CPU[ID].REGs[A]>>CPU[ID].REGs[B]<0){CPU[ID].flag[2]=false;}} break;
-    case 0x0B:// NOT    |
-     if (sys.Debug == true) { sprintf(msg,"%sNOT\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
-     CPU[ID].REGs[A] = ~CPU[ID].REGs[A]; break;
-    case 0x0C:// flag  |
-     if (sys.Debug == true) { sprintf(msg,"%sFLAG\n",msg); } CPU[ID].REGs[A] = 0;
-     for(i=0;i<8;i++) {CPU[ID].REGs[A]+=pow(2,i)*CPU[ID].flag[i]; if(sys.Debug==true){printf("CPU[ID].flag[%d]: %s\n",i,(CPU[ID].flag[i])?"true":"false");} CPU[ID].flag[i]=false;} CPU[ID].flag[0]=true; break;
-    case 0x0D:// JMP    |
-     if (sys.Debug == true) { sprintf(msg,"%sJUMP\n",msg); }
-     memset(CPU[ID].flag, 0, 8);
-     if (C >= 1) { CPU[ID].IP = (CPU[ID].REGs[A]<<16|CPU[ID].REGs[B])-6; CPU[ID].flag[1]=true; }else{ CPU[ID].IP = IMM-6; } break;
-    case 0x0E:// CMPEQ  |
-     if (sys.Debug == true) { sprintf(msg,"%sCMP=\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
-     if (IMM>0) {  if (CPU[ID].REGs[A] != IMM) { CPU[ID].IP += ((C>0)?C:1)*6; }
-     }else if(CPU[ID].REGs[A] != CPU[ID].REGs[B]) { CPU[ID].IP += ((C>0)?C:1)*6; } break;
-    case 0x0F:// CMPLT  |
-     if (sys.Debug == true) { sprintf(msg,"%sCMP<\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
-     if (IMM>0) { if (!(CPU[ID].REGs[A] <  IMM)) { CPU[ID].IP += ((C>0)?C:1)*6; }
-     }else if(!(CPU[ID].REGs[A] <  CPU[ID].REGs[B])) { CPU[ID].IP += ((C>0)?C:1)*6; } break;
-    case 0x10:// CMPGT  |
-     if (sys.Debug == true) { sprintf(msg,"%sCMP>\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
-     if (IMM>0) {  if (~(CPU[ID].REGs[A] >  IMM)) { CPU[ID].IP += ((C>0)?C:1)*6; }
-     }else if(~(CPU[ID].REGs[A] >  CPU[ID].REGs[B])) { CPU[ID].IP += ((C>0)?C:1)*6; } break;
-    case 0x11:// SPLIT  |
-     if (sys.Debug == true) { sprintf(msg,"%sSPLIT\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true;
-     if ((IMM % 0x2) == 0) { CPU[ID].REGs[B] = CPU[ID].REGs[A] & 0xFF; CPU[ID].REGs[C] = CPU[ID].REGs[A] >> 8; } else { CPU[ID].REGs[B] = CPU[ID].REGs[A] & 0xF; CPU[ID].REGs[C] = CPU[ID].REGs[A] >> 4; } break;
-    case 0x12:// COMB   |
-     if (sys.Debug == true) { sprintf(msg,"%sCOMBINE\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true;
-     if ((IMM % 0x2) == 0) { CPU[ID].REGs[C] = (CPU[ID].REGs[A] << 8) | (CPU[ID].REGs[B] & 0xFF); }else{ CPU[ID].REGs[C] = (CPU[ID].REGs[A] << 4) | (CPU[ID].REGs[B] & 0xF); } break;
-
-    case 0x13:// WMEM   |
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[1]=true;
-     if (IMM > 0xD7FFFFF) { IMM = (CPU[ID].REGs[B]<<16|CPU[ID].REGs[C])%0xD7FFFFF; }
-     if (IMM > 0x0FFFFFF) {
+  if(CPU[ID].running && !sys.pause) {
+   clock_gettime(CLOCK_MONOTONIC_RAW, &start);
+   for(int j=0;j<23530;j++) { CPU[ID].IP=CPU[ID].IP%0xD800000;
+    if(CPU[ID].ticked) { CPU[ID].IPS = 0; CPU[ID].ticked = 0; }
+    uint8_t A   =  sys.MEM[CPU[ID].IP+1] >> 4 ;       //4 \.
+    uint8_t B   =  sys.MEM[CPU[ID].IP+1] & 0xF;       //4 |-> A/B/C = 1.5 bytes
+    uint8_t C   =  sys.MEM[CPU[ID].IP+2] >> 4 ;       //4 /'
+    int32_t IMM = (sys.MEM[CPU[ID].IP+2] & 0xF) << 8; //4 \.
+    IMM  = (IMM |  sys.MEM[CPU[ID].IP+3]) << 8;       //8 |->  IMM  = 3.5 bytes
+    IMM  = (IMM |  sys.MEM[CPU[ID].IP+4]) << 8;       //8 |
+    IMM |=         sys.MEM[CPU[ID].IP+5];             //8 /'
+    if (sys.Debug == true) {
+     sprintf(msg,"%s\n[Core#%x] IC: 0x%07X/%9X (Area ",msg,ID,CPU[ID].IP,CPU[ID].IP);
+     if      (CPU[ID].IP>=0x0000000 && CPU[ID].IP<=0x07FFFFF) { sprintf(msg,"%s0:ROM PAGE#0",msg); }
+     else if (CPU[ID].IP>=0x0800000 && CPU[ID].IP<=0x0FFFFFF) { sprintf(msg,"%s1:ROM PAGE#1",msg); }
+     else if (CPU[ID].IP>=0x1000000 && CPU[ID].IP<=0x17FFFFF) { sprintf(msg,"%s2:SAV data",msg); }
+     else if (CPU[ID].IP>=0x1800000 && CPU[ID].IP<=0x96FFBFF) { sprintf(msg,"%s3:Work RAM",msg); }
+     else if (CPU[ID].IP>=0x96FFC00 && CPU[ID].IP<=0x97FFBFF) { sprintf(msg,"%s4:Stack Memory",msg); }
+     else if (CPU[ID].IP>=0x97FFC00 && CPU[ID].IP<=0x97FFFFF) { sprintf(msg,"%s5:Static Memory",msg); }
+     else if (CPU[ID].IP>=0x9800000 && CPU[ID].IP<=0xD77FFFF) { sprintf(msg,"%s6:Video RAM",msg); }
+     else if (CPU[ID].IP>=0xD780000 && CPU[ID].IP<=0xD7FFFFF) { sprintf(msg,"%s7:Stack VMem",msg); }
+     else { sprintf(msg,"%s?:Invalid Address",msg); } sprintf(msg,"%s)\n\\ >> [",msg);
+     for (i=0; i < 6; i++) { sprintf(msg,"%s0x%02X",msg,sys.MEM[CPU[ID].IP+i]); if (i < 5) { sprintf(msg,"%s, ",msg); } }
+     sprintf(msg,"%s] | [A:%c, B:%c, C:%c, IMM:0x%07X]\n\\REGs: [",msg,sys.REG[A],sys.REG[B],sys.REG[C],IMM);
+     for (i=0; i < 8; i++) { sprintf(msg,"%s%c:0x%04X%s",msg,sys.REG[i],CPU[ID].REGs[i],(i<7)?", ":""); }
+//     sprintf(msg,"%s%c:0x%04X, ",msg,sys.REG[0],CPU[ID].REGs[0]); sprintf(msg,"%s%c:0x%04X, ",msg,sys.REG[1],CPU[ID].REGs[1]); sprintf(msg,"%s%c:0x%04X, ",msg,sys.REG[2],CPU[ID].REGs[2]); sprintf(msg,"%s%c:0x%04X, ",msg,sys.REG[3],CPU[ID].REGs[3]); sprintf(msg,"%s%c:0x%04X, ",msg,sys.REG[4],CPU[ID].REGs[4]); sprintf(msg,"%s%c:0x%04X, ",msg,sys.REG[5],CPU[ID].REGs[5]); sprintf(msg,"%s%c:0x%04X, ",msg,sys.REG[6],CPU[ID].REGs[6]); sprintf(msg,"%s%c:0x%04X"  ,msg,sys.REG[7],CPU[ID].REGs[7]);
+     sprintf(msg,"%s] | TotalRan: %ld (%ld)\n\\StackPointer: 0x%x/%d | StackBase: 0x%x/%d\n\\\\StackData:[",msg,CPU[ID].TI,sys.TI,CPU[ID].SP,CPU[ID].SP,CPU[ID].BP,CPU[ID].BP);
+     for (i = CPU[ID].SP+1; i <= CPU[ID].BP; ++i){
+      if((i+1)%2==0) { sprintf(msg,"%s 0x",msg); }
+      sprintf(msg,"%s%02X",msg,sys.MEM[i]);
+      if(i%16==0 && i != 0) { sprintf(msg,"%s\n",msg); }
+     } sprintf(msg,"%s]\n \\instruction: ",msg);
+    }
+    //Flags | WrittenREG, ReadREG, OverFlow, PointerOOB, ALUoperated, DivideBy0
+//    printf("sys.MEM[CPU[ID].IP]: 0x%02X\n",sys.MEM[CPU[ID].IP]);
+    switch(sys.MEM[CPU[ID].IP]) {
+     case 0x00:// LOAD   |
+      if (sys.Debug == true) { sprintf(msg,"%sMOV\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true;
+      if (C > 0) { CPU[ID].REGs[A] = CPU[ID].REGs[B]; CPU[ID].flag[1]=true; }
+      else { CPU[ID].REGs[A] = IMM; } break;
+     case 0x01:// ADD    |
+      if (sys.Debug == true) { sprintf(msg,"%sADD\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
+      if (IMM > 0) { CPU[ID].REGs[C] = CPU[ID].REGs[A]+IMM;             if(CPU[ID].REGs[A]+IMM            >0xFFFF){CPU[ID].flag[2]=true;}}
+      else {         CPU[ID].REGs[C] = CPU[ID].REGs[A]+CPU[ID].REGs[B]; if(CPU[ID].REGs[A]+CPU[ID].REGs[B]>0xFFFF){CPU[ID].flag[2]=true;}} break;
+     case 0x02:// SUB    |
+      if (sys.Debug == true) { sprintf(msg,"%sSUB\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[2]=true; CPU[ID].flag[4]=true;
+      if (IMM > 0) { CPU[ID].REGs[C] = CPU[ID].REGs[A]-IMM;             if(CPU[ID].REGs[A]-IMM            <0){CPU[ID].flag[2]=false;}}
+      else {         CPU[ID].REGs[C] = CPU[ID].REGs[A]-CPU[ID].REGs[B]; if(CPU[ID].REGs[A]-CPU[ID].REGs[B]<0){CPU[ID].flag[2]=false;}} break;
+     case 0x03:// MUL    |
+      if (sys.Debug == true) { sprintf(msg,"%sMUL\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
+      if (IMM > 0) { CPU[ID].REGs[C] = CPU[ID].REGs[A]*IMM;             if(CPU[ID].REGs[A]*IMM            >0xFFFF){CPU[ID].flag[2]=true;}}
+      else {         CPU[ID].REGs[C] = CPU[ID].REGs[A]*CPU[ID].REGs[B]; if(CPU[ID].REGs[A]*CPU[ID].REGs[B]>0xFFFF){CPU[ID].flag[2]=true;}} break;
+     case 0x04:// DIV    |
+      if (sys.Debug == true) { sprintf(msg,"%sDIV\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[2]=true; CPU[ID].flag[4]=true;
+      if (CPU[ID].REGs[A]==0) {CPU[ID].REGs[C] = 0; CPU[ID].flag[5]=true; break;}
+      if (IMM >= 1) { CPU[ID].REGs[C] = CPU[ID].REGs[A]/IMM;             if(CPU[ID].REGs[A]%IMM            >0){CPU[ID].flag[2]=false;}}
+      else {          CPU[ID].REGs[C] = CPU[ID].REGs[A]/CPU[ID].REGs[B]; if(CPU[ID].REGs[A]%CPU[ID].REGs[B]>0){CPU[ID].flag[2]=false;}} break;
+     case 0x05:// MOD    |
+      if (sys.Debug == true) { sprintf(msg,"%sMOD\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
+      if (CPU[ID].REGs[A]==0) {CPU[ID].REGs[C] = 0; CPU[ID].flag[5]=true; break;}
+      if (IMM >= 1) { CPU[ID].REGs[C] = CPU[ID].REGs[A]%IMM;             }
+      else {          CPU[ID].REGs[C] = CPU[ID].REGs[A]%CPU[ID].REGs[B]; } break;
+     case 0x06:// AND    |
+      if (sys.Debug == true) { sprintf(msg,"%sAND\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
+      if (IMM > 0) { CPU[ID].REGs[C] = CPU[ID].REGs[A]&IMM; }else{ CPU[ID].REGs[C] = CPU[ID].REGs[A]&CPU[ID].REGs[B]; } break;
+     case 0x07:// OR     |
+      if (sys.Debug == true) { sprintf(msg,"%sOR\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
+      if (IMM > 0) { CPU[ID].REGs[C] = CPU[ID].REGs[A]|IMM; }else{ CPU[ID].REGs[C] = CPU[ID].REGs[A]|CPU[ID].REGs[B]; } break;
+     case 0x08:// XOR    |
+      if (sys.Debug == true) { sprintf(msg,"%sXOR\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
+      if (IMM > 0) { CPU[ID].REGs[C] = CPU[ID].REGs[A]^IMM; }else{ CPU[ID].REGs[C] = CPU[ID].REGs[A]^CPU[ID].REGs[B]; } break;
+     case 0x09:// BSL    |
+      if (sys.Debug == true) { sprintf(msg,"%sBSL\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
+      if (IMM > 0) { CPU[ID].REGs[C] = CPU[ID].REGs[A]<<IMM;             if(CPU[ID].REGs[A]<<IMM            >0xFFFF){CPU[ID].flag[2]=true;}}
+      else {         CPU[ID].REGs[C] = CPU[ID].REGs[A]<<CPU[ID].REGs[B]; if(CPU[ID].REGs[A]<<CPU[ID].REGs[B]>0xFFFF){CPU[ID].flag[2]=true;}} break;
+     case 0x0A:// BSR    |
+      if (sys.Debug == true) { sprintf(msg,"%sBSR\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[2]=true; CPU[ID].flag[4]=true;
+      if (IMM > 0) { CPU[ID].REGs[C] = CPU[ID].REGs[A]>>IMM;             if(CPU[ID].REGs[A]>>IMM            <0){CPU[ID].flag[2]=false;}}
+      else {         CPU[ID].REGs[C] = CPU[ID].REGs[A]>>CPU[ID].REGs[B]; if(CPU[ID].REGs[A]>>CPU[ID].REGs[B]<0){CPU[ID].flag[2]=false;}} break;
+     case 0x0B:// NOT    |
+      if (sys.Debug == true) { sprintf(msg,"%sNOT\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
+      CPU[ID].REGs[A] = ~CPU[ID].REGs[A]; break;
+     case 0x0C:// flag  |
+      if (sys.Debug == true) { sprintf(msg,"%sFLAG\n",msg); } CPU[ID].REGs[A] = 0;
+      for(i=0;i<8;i++) {CPU[ID].REGs[A]+=pow(2,i)*CPU[ID].flag[i]; if(sys.Debug==true){printf("CPU[ID].flag[%d]: %s\n",i,(CPU[ID].flag[i])?"true":"false");} CPU[ID].flag[i]=false;} CPU[ID].flag[0]=true; break;
+     case 0x0D:// JMP    |
+      if (sys.Debug == true) { sprintf(msg,"%sJUMP\n",msg); }
+      memset(CPU[ID].flag, 0, 8);
+      if (C >= 1) { CPU[ID].IP = (CPU[ID].REGs[A]<<16|CPU[ID].REGs[B])-6; CPU[ID].flag[1]=true; }else{ CPU[ID].IP = IMM-6; } break;
+     case 0x0E:// CMPEQ  |
+      if (sys.Debug == true) { sprintf(msg,"%sCMP=\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
+      if (IMM>0) {  if (CPU[ID].REGs[A] != IMM) { CPU[ID].IP += ((C>0)?C:1)*6; }
+      }else if(CPU[ID].REGs[A] != CPU[ID].REGs[B]) { CPU[ID].IP += ((C>0)?C:1)*6; } break;
+     case 0x0F:// CMPLT  |
+      if (sys.Debug == true) { sprintf(msg,"%sCMP<\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
+      if (IMM>0) { if (!(CPU[ID].REGs[A] <  IMM)) { CPU[ID].IP += ((C>0)?C:1)*6; }
+      }else if(!(CPU[ID].REGs[A] <  CPU[ID].REGs[B])) { CPU[ID].IP += ((C>0)?C:1)*6; } break;
+     case 0x10:// CMPGT  |
+      if (sys.Debug == true) { sprintf(msg,"%sCMP>\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[1]=true; CPU[ID].flag[4]=true;
+      if (IMM>0) {  if (!(CPU[ID].REGs[A] >  IMM)) { CPU[ID].IP += ((C>0)?C:1)*6; }
+      }else if(!(CPU[ID].REGs[A] >  CPU[ID].REGs[B])) { CPU[ID].IP += ((C>0)?C:1)*6; } break;
+     case 0x11:// SPLIT  |
+      if (sys.Debug == true) { sprintf(msg,"%sSPLIT\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true;
+      if ((IMM % 0x2) == 0) { CPU[ID].REGs[B] = CPU[ID].REGs[A] & 0xFF; CPU[ID].REGs[C] = CPU[ID].REGs[A] >> 8; } else { CPU[ID].REGs[B] = CPU[ID].REGs[A] & 0xF; CPU[ID].REGs[C] = CPU[ID].REGs[A] >> 4; } break;
+     case 0x12:// COMB   |
+      if (sys.Debug == true) { sprintf(msg,"%sCOMBINE\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true; CPU[ID].flag[1]=true;
+      if ((IMM % 0x2) == 0) { CPU[ID].REGs[C] = (CPU[ID].REGs[A] << 8) | (CPU[ID].REGs[B] & 0xFF); }else{ CPU[ID].REGs[C] = (CPU[ID].REGs[A] << 4) | (CPU[ID].REGs[B] & 0xF); } break;
+     
+     case 0x13:// WMEM   |
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[1]=true;
+      if (IMM > 0xD7FFFFF) { IMM = (CPU[ID].REGs[B]<<16|CPU[ID].REGs[C])%0xD7FFFFF; }
+      if (IMM > 0x0FFFFFF) {
+       if (sys.Debug == true) {
+        sprintf(msg,"%sWMEM\n  \\Writing REG:%c to 0x%x  (Area ",msg,sys.REG[A],IMM);
+        if      (IMM>=0x0000000 && IMM<=0x07FFFFF) { sprintf(msg,"%s0:ROM PAGE#0)\n",msg); }
+        else if (IMM>=0x0800000 && IMM<=0x0FFFFFF) { sprintf(msg,"%s1:ROM PAGE#1)\n",msg); }
+        else if (IMM>=0x1000000 && IMM<=0x17FFFFF) { sprintf(msg,"%s2:SAV data)\n",msg); }
+        else if (IMM>=0x1800000 && IMM<=0x96FFBFF) { sprintf(msg,"%s3:Work RAM)\n",msg); }
+        else if (IMM>=0x96FFC00 && IMM<=0x97FFBFF) { sprintf(msg,"%s4:Stack Memory)\n",msg); }
+        else if (IMM>=0x97FFC00 && IMM<=0x97FFFFF) { sprintf(msg,"%s5:Static Memory)\n",msg); }
+        else if (IMM>=0x9800000 && IMM<=0xD77FFFF) { sprintf(msg,"%s6:Video RAM)\n",msg); }
+        else if (IMM>=0xD780000 && IMM<=0xD7FFFFF) { sprintf(msg,"%s7:Stack VMem)\n",msg); }
+        else { sprintf(msg,"%sInvalid Address)\n",msg); }
+       } sys.MEM[IMM]=CPU[ID].REGs[A]; if (IMM>=0x1000000 && IMM<=0x17FFFFF) { WriteSAV(IMM-0x1000000, CPU[ID].REGs[A]); }
+      } else {
+       sprintf(msg,"%s[EMU Warning] CPU#%i: Invalid Instuction, You cannot write to ROM!\n",msg,ID);
+      } break;
+     case 0x14:// RMEM   |
+      if (IMM > 0xD7FFFFF) { IMM = (CPU[ID].REGs[B]<<16|CPU[ID].REGs[C])%0xD7FFFFF; }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true;
       if (sys.Debug == true) {
-       sprintf(msg,"%sWMEM\n  \\Writing REG:%c to 0x%x  (Area ",msg,sys.REG[A],IMM);
+       sprintf(msg,"%sRMEM\n  \\EMU Service: Reading 0x%x to REG:%c (Area ",msg,IMM,sys.REG[A]);
        if      (IMM>=0x0000000 && IMM<=0x07FFFFF) { sprintf(msg,"%s0:ROM PAGE#0)\n",msg); }
        else if (IMM>=0x0800000 && IMM<=0x0FFFFFF) { sprintf(msg,"%s1:ROM PAGE#1)\n",msg); }
        else if (IMM>=0x1000000 && IMM<=0x17FFFFF) { sprintf(msg,"%s2:SAV data)\n",msg); }
@@ -471,123 +495,96 @@ void ClientCore(bool ID) {
        else if (IMM>=0x9800000 && IMM<=0xD77FFFF) { sprintf(msg,"%s6:Video RAM)\n",msg); }
        else if (IMM>=0xD780000 && IMM<=0xD7FFFFF) { sprintf(msg,"%s7:Stack VMem)\n",msg); }
        else { sprintf(msg,"%sInvalid Address)\n",msg); }
-      } sys.MEM[IMM]=CPU[ID].REGs[A]; if (IMM>=0x1000000 && IMM<=0x17FFFFF) { WriteSAV(IMM-0x1000000, CPU[ID].REGs[A]); }
-     } else {
-      sprintf(msg,"%s[EMU Warning] CPU#%i: Invalid Instuction, You cannot write to ROM!\n",msg,ID);
-     } break;
-    case 0x14:// RMEM   |
-     if (IMM > 0xD7FFFFF) { IMM = (CPU[ID].REGs[B]<<16|CPU[ID].REGs[C])%0xD7FFFFF; }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true;
-     if (sys.Debug == true) {
-      sprintf(msg,"%sRMEM\n  \\EMU Service: Reading 0x%x to REG:%c (Area ",msg,IMM,sys.REG[A]);
-      if      (IMM>=0x0000000 && IMM<=0x07FFFFF) { sprintf(msg,"%s0:ROM PAGE#0)\n",msg); }
-      else if (IMM>=0x0800000 && IMM<=0x0FFFFFF) { sprintf(msg,"%s1:ROM PAGE#1)\n",msg); }
-      else if (IMM>=0x1000000 && IMM<=0x17FFFFF) { sprintf(msg,"%s2:SAV data)\n",msg); }
-      else if (IMM>=0x1800000 && IMM<=0x96FFBFF) { sprintf(msg,"%s3:Work RAM)\n",msg); }
-      else if (IMM>=0x96FFC00 && IMM<=0x97FFBFF) { sprintf(msg,"%s4:Stack Memory)\n",msg); }
-      else if (IMM>=0x97FFC00 && IMM<=0x97FFFFF) { sprintf(msg,"%s5:Static Memory)\n",msg); }
-      else if (IMM>=0x9800000 && IMM<=0xD77FFFF) { sprintf(msg,"%s6:Video RAM)\n",msg); }
-      else if (IMM>=0xD780000 && IMM<=0xD7FFFFF) { sprintf(msg,"%s7:Stack VMem)\n",msg); }
-      else { sprintf(msg,"%sInvalid Address)\n",msg); }
-     } CPU[ID].REGs[A]=sys.MEM[IMM]; break;
-
-    case 0x15:// HALT   |
-     if (sys.Debug == true) { sprintf(msg,"%sHALT\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[1]=true;
-     sys.ErrorType = 0;
-     sprintf(sys.Error,"HALT INSTUCTION NOT FINISHED!");
-     for(i=0;i<2;i++) {CPU[i].running=false; sprintf(msg,"%sHALTING CPU#%i!\n",msg,i);}
-     break;
-    case 0x16:// DISP   |
-     if (sys.Debug == true) { sprintf(msg,"%sDISP\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[1]=true;
-     if (!sys.blockDisp) {
-      if((IMM%3)==0) { printf("%c: 0x%04X\n",sys.REG[A],CPU[ID].REGs[A]); } else
-      if((IMM%3)==1) { printf("%c: 0x%04X\t%c: 0x%04X\t\n",sys.REG[A],CPU[ID].REGs[A],sys.REG[B],CPU[ID].REGs[B]); } else
-      if((IMM%3)==2) { printf("%c: 0x%04X\t%c: 0x%04X\t%c: 0x%04X\t\n",sys.REG[A],CPU[ID].REGs[A],sys.REG[B],CPU[ID].REGs[B],sys.REG[C],CPU[ID].REGs[C]); }
-     } break;
-    case 0x17:// IPOUT  |
-     if (sys.Debug == true) { sprintf(msg,"%sIPOUT\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true;
-     CPU[ID].REGs[A]=CPU[ID].IP>>16; CPU[ID].REGs[B]=CPU[ID].IP&0xFFFF;
-     break;
-    case 0x18:// PAGE   |
-     if (sys.Debug == true) { sprintf(msg,"%sPAGE\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true;
-     LoadPage(A%2,IMM&0xFF%0x21);
-     break;
-    case 0x19:// CORE   |
-     if (sys.Debug == true) { sprintf(msg,"%sCORE\n",msg); }
-     //A = CoreID
-     //B = State
-     //IMM = Start Address
-     CPU[A%2].IP = IMM;
-     CPU[A%2].running = B%2;
-     break;
-    case 0x1A:// PUSH   |
-     if (sys.Debug == true) { sprintf(msg,"%sPUSH\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[1]=true;
-     if (CPU[ID].SP-2 < CPU[ID].BP) { sys.ErrorType = 3; sprintf(sys.Error,"CPU#%i: PANIC! STACK OVERFLOW!!",ID); CPU[ID].running=false; break;}
-     else {sys.MEM[CPU[ID].SP--] = CPU[ID].REGs[A]&0xFF,sys.MEM[CPU[ID].SP--] = CPU[ID].REGs[A]>>8; } break;
-    case 0x1B:// POP    |
-     if (sys.Debug == true) { sprintf(msg,"%sPOP\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true;
-     if (CPU[ID].SP+2 > CPU[ID].MP) { sys.ErrorType = 3; sprintf(sys.Error,"CPU#%i: PANIC! stack empty...",ID); CPU[ID].running=false; break;}
-     else {CPU[ID].REGs[A] = sys.MEM[CPU[ID].SP++]|(sys.MEM[CPU[ID].SP++]<<8); } break;
-    case 0x1C:// CALL   |
-     if (sys.Debug == true) { sprintf(msg,"%sCALL\n",msg); } if(C>0){CPU[ID].flag[1]=true;}
-     if (CPU[ID].SP-4 < CPU[ID].BP) { sys.ErrorType = 3; sprintf(sys.Error,"CPU#%i: PANIC! STACK OVERFLOW!!",ID); CPU[ID].running=false; break;}
-     else {sys.MEM[CPU[ID].SP--] = CPU[ID].IP,sys.MEM[CPU[ID].SP--] = CPU[ID].IP>>8,sys.MEM[CPU[ID].SP--] = CPU[ID].IP>>16,sys.MEM[CPU[ID].SP--] = CPU[ID].IP>>24,CPU[ID].IP = ((C==0)?IMM:(A<<16|B))&0xFFFFFFFFF;} break;
-    case 0x1D:// RET    |
-     if (sys.Debug == true) { sprintf(msg,"%sRET\n",msg); }
-     memset(CPU[ID].flag, 0, 8);
-     if (CPU[ID].SP+4 > CPU[ID].MP) {sys.ErrorType = 3; sprintf(sys.Error,"CPU#%i: PANIC! stack empty...",ID); CPU[ID].running=false; break;}
-      CPU[ID].IP = sys.MEM[CPU[ID].SP--]|sys.MEM[CPU[ID].SP--]<<8|sys.MEM[CPU[ID].SP--]<<16|sys.MEM[CPU[ID].SP--]<<24; break;
-    case 0x1E:// SWAP   |
-     if (sys.Debug == true) { sprintf(msg,"%sSWAP\n",msg); }
-     memset(CPU[ID].flag, 0, 8);
-     if (!CPU[ID].SP+4 > CPU[ID].MP) {
-      sys.tmp[0]=sys.MEM[CPU[ID].SP+3],sys.tmp[1]=sys.MEM[CPU[ID].SP+4];
-      sys.MEM[CPU[ID].SP+3]=sys.MEM[CPU[ID].SP+1],sys.MEM[CPU[ID].SP+4]=sys.MEM[CPU[ID].SP+2];
-      sys.MEM[CPU[ID].SP+1]=sys.tmp[0],sys.MEM[CPU[ID].SP+2]=sys.tmp[1];
-     } break;
-    case 0x1F:// LED    |
-     if (sys.Debug == true) { sprintf(msg,"%sLED\n",msg); }
-     memset(CPU[ID].flag, 0, 8); if(C>0){CPU[ID].flag[1]=true;}
-     //TODO
-     break;
-    case 0x20:// CLK    |
-     if (sys.Debug == true) { sprintf(msg,"%sCLOCK\n",msg); }
-     memset(CPU[ID].flag, 0, 8);
-     if(!(IMM>0)) { CPU[ID].flag[1]=true; CPU[ID].REGs[A]=sys.Clock; }
-     else { sys.Clock=0; } break;
-    case 0x21:// WAIT   |
-     if (sys.Debug == true) { sprintf(msg,"%sWAIT\n",msg); }
-     memset(CPU[ID].flag, 0, 8); CPU[ID].flag[1]=true;
-     dslp = CPU[ID].REGs[A];
-     break;
-    case 0xFF:// NOP    |
-     if (sys.Debug == true) { sprintf(msg,"%sNOP\n",msg); }
-     memset(CPU[ID].flag, 0, 8); break;
-    default:
-     if (sys.Debug == true) { sprintf(msg,"%sUNKNOWN\n",msg); }
-     sys.ErrorType = 2;
-     sprintf(sys.Error,"CPU#%i: Unknown Operation 0x%02X",ID,sys.MEM[CPU[ID].IP]);
-     CPU[ID].running = 0;
+      } CPU[ID].REGs[A]=sys.MEM[IMM]; break;
+     
+     case 0x15:// HALT   |
+      if (sys.Debug == true) { sprintf(msg,"%sHALT\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[1]=true;
+      sys.ErrorType = 0;
+      sprintf(sys.Error,"HALT INSTUCTION NOT FINISHED!");
+      for(i=0;i<2;i++) {CPU[i].running=false; sprintf(msg,"%sHALTING CPU#%i!\n",msg,i);}
       break;
-   } CPU[ID].IP+=6; CPU[ID].IPS++; CPU[ID].TI++; sys.TI++;
-   if (sys.Debug == true) { printf("%s",msg); memset(msg,0,sizeof(msg)); }
-   if (sys.AsService == true) {sendError(); } else { printError(); }
-   if (sys.MEM[CPU[ID].IP] == 0x21) { usleep(dslp*1000); }
-   else {
-    //what do i do here? clearly this isn't right (too slow)
-    //usleep((1-(CPU[ID].IPS/24000000.0f))*1000);
-    
-    // this only gives around 50%
-    for(uint32_t i=0;i<CPU[ID].IPS/ 6000000;i++);
-   }
-//   sleep(1);
-//   while(getchar()!='\n');
-//   dumpData("ROMPG#1", sys.MEM, SIZ8MB, SIZ8MB, SIZ8MB+0x40);
+     case 0x16:// DISP   |
+      if (sys.Debug == true) { sprintf(msg,"%sDISP\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[1]=true;
+      if (!sys.blockDisp) {
+       if((IMM%3)==0) { printf("%c: 0x%04X\n",sys.REG[A],CPU[ID].REGs[A]); } else
+       if((IMM%3)==1) { printf("%c: 0x%04X\t%c: 0x%04X\t\n",sys.REG[A],CPU[ID].REGs[A],sys.REG[B],CPU[ID].REGs[B]); } else
+       if((IMM%3)==2) { printf("%c: 0x%04X\t%c: 0x%04X\t%c: 0x%04X\t\n",sys.REG[A],CPU[ID].REGs[A],sys.REG[B],CPU[ID].REGs[B],sys.REG[C],CPU[ID].REGs[C]); }
+      } break;
+     case 0x17:// IPOUT  |
+      if (sys.Debug == true) { sprintf(msg,"%sIPOUT\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true;
+      CPU[ID].REGs[A]=CPU[ID].IP>>16; CPU[ID].REGs[B]=CPU[ID].IP&0xFFFF;
+      break;
+     case 0x18:// PAGE   |
+      if (sys.Debug == true) { sprintf(msg,"%sPAGE\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true;
+      LoadPage(A%2,IMM&0xFF%0x21);
+      break;
+     case 0x19:// CORE   |
+      if (sys.Debug == true) { sprintf(msg,"%sCORE\n",msg); }
+      //A = CoreID
+      //B = State
+      //IMM = Start Address
+      CPU[A%2].IP = IMM;
+      CPU[A%2].running = B%2;
+      break;
+     case 0x1A:// PUSH   |
+      if (sys.Debug == true) { sprintf(msg,"%sPUSH\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[1]=true;
+      if (CPU[ID].SP-2 < CPU[ID].BP) { sys.ErrorType = 3; sprintf(sys.Error,"CPU#%i: PANIC! STACK OVERFLOW!!",ID); CPU[ID].running=false; break;}
+      else {sys.MEM[CPU[ID].SP--] = CPU[ID].REGs[A]&0xFF,sys.MEM[CPU[ID].SP--] = CPU[ID].REGs[A]>>8; } break;
+     case 0x1B:// POP    |
+      if (sys.Debug == true) { sprintf(msg,"%sPOP\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[0]=true;
+      if (CPU[ID].SP+2 > CPU[ID].MP) { sys.ErrorType = 3; sprintf(sys.Error,"CPU#%i: PANIC! stack empty...",ID); CPU[ID].running=false; break;}
+      else {CPU[ID].REGs[A] = sys.MEM[CPU[ID].SP++]|(sys.MEM[CPU[ID].SP++]<<8); } break;
+     case 0x1C:// CALL   |
+      if (sys.Debug == true) { sprintf(msg,"%sCALL\n",msg); } if(C>0){CPU[ID].flag[1]=true;}
+      if (CPU[ID].SP-4 < CPU[ID].BP) { sys.ErrorType = 3; sprintf(sys.Error,"CPU#%i: PANIC! STACK OVERFLOW!!",ID); CPU[ID].running=false; break;}
+      else {sys.MEM[CPU[ID].SP--] = CPU[ID].IP,sys.MEM[CPU[ID].SP--] = CPU[ID].IP>>8,sys.MEM[CPU[ID].SP--] = CPU[ID].IP>>16,sys.MEM[CPU[ID].SP--] = CPU[ID].IP>>24,CPU[ID].IP = ((C==0)?IMM:(A<<16|B))&0xFFFFFFFFF;} break;
+     case 0x1D:// RET    |
+      if (sys.Debug == true) { sprintf(msg,"%sRET\n",msg); }
+      memset(CPU[ID].flag, 0, 8);
+      if (CPU[ID].SP+4 > CPU[ID].MP) {sys.ErrorType = 3; sprintf(sys.Error,"CPU#%i: PANIC! stack empty...",ID); CPU[ID].running=false; break;}
+       CPU[ID].IP = sys.MEM[CPU[ID].SP--]|sys.MEM[CPU[ID].SP--]<<8|sys.MEM[CPU[ID].SP--]<<16|sys.MEM[CPU[ID].SP--]<<24; break;
+     case 0x1E:// SWAP   |
+      if (sys.Debug == true) { sprintf(msg,"%sSWAP\n",msg); }
+      memset(CPU[ID].flag, 0, 8);
+      if (!CPU[ID].SP+4 > CPU[ID].MP) {
+       sys.tmp[0]=sys.MEM[CPU[ID].SP+3],sys.tmp[1]=sys.MEM[CPU[ID].SP+4];
+       sys.MEM[CPU[ID].SP+3]=sys.MEM[CPU[ID].SP+1],sys.MEM[CPU[ID].SP+4]=sys.MEM[CPU[ID].SP+2];
+       sys.MEM[CPU[ID].SP+1]=sys.tmp[0],sys.MEM[CPU[ID].SP+2]=sys.tmp[1];
+      } break;
+     case 0x1F:// LED    |
+      if (sys.Debug == true) { sprintf(msg,"%sLED\n",msg); }
+      memset(CPU[ID].flag, 0, 8); if(C>0){CPU[ID].flag[1]=true;}
+      //TODO
+      break;
+     case 0x20:// CLK    |
+      if (sys.Debug == true) { sprintf(msg,"%sCLOCK\n",msg); }
+      memset(CPU[ID].flag, 0, 8);
+      if(!(IMM>0)) { CPU[ID].flag[1]=true; CPU[ID].REGs[A]=sys.Clock; }
+      else { sys.Clock=0; } break;
+     case 0x21:// WAIT   |
+      if (sys.Debug == true) { sprintf(msg,"%sWAIT\n",msg); }
+      memset(CPU[ID].flag, 0, 8); CPU[ID].flag[1]=true;
+      dslp = CPU[ID].REGs[A];
+      break;
+     case 0xFF:// NOP    |
+      if (sys.Debug == true) { sprintf(msg,"%sNOP\n",msg); }
+      memset(CPU[ID].flag, 0, 8); break;
+     default:
+      if (sys.Debug == true) { sprintf(msg,"%sUNKNOWN\n",msg); }
+      sys.ErrorType = 2;
+      sprintf(sys.Error,"CPU#%i: Unknown Operation 0x%02X",ID,sys.MEM[CPU[ID].IP]);
+      CPU[ID].running = 0;
+       break;
+    } CPU[ID].IP+=6; CPU[ID].IPS++; CPU[ID].TI++; sys.TI++;
+    if (sys.Debug == true) { printf("%s",msg); memset(msg,0,sizeof(msg)); }
+    if (sys.AsService == true) {sendError(); } else { printError(); }
+    if (sys.MEM[CPU[ID].IP] == 0x21) { usleep(dslp*1000); }
+   } clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+   usleep(zeroup(1000-((end.tv_sec-start.tv_sec)*1000000+(end.tv_nsec-start.tv_nsec)/1000)));
 }}}
-
